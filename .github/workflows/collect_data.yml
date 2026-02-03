@@ -25,7 +25,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install sentinelhub-py cdsapi pandas pillow requests
+        pip install sentinelhub cdsapi pandas pillow requests
         
     - name: Run Copernicus Collector
       env:

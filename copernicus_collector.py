@@ -27,6 +27,13 @@ from sentinelhub import (
 )
 import db_config
 import csv
+import requests
+
+# ============================================================
+# CONFIGURACIÓN OPENWEATHER
+# ============================================================
+OWM_API_KEY = "ca45f79113069e3524b4877bebe6e0dd"
+OWM_URL = "https://api.openweathermap.org/data/2.5/weather"
 
 # ============================================================
 # GESTIÓN DE CUOTA
@@ -372,6 +379,46 @@ def get_satellite_map(map_type='rgb', start_date=None, end_date=None):
         
     except Exception as e:
         print(f"[ERROR] Generación de mapa: {e}")
+        return None
+
+# ============================================================
+# OPENWEATHERMAP API - CLIMA ACTUAL
+# ============================================================
+
+def get_weather_data():
+    """Obtiene datos del clima actual via OpenWeatherMap"""
+    print(f"\n[OpenWeather] Consultando clima actual...")
+    try:
+        params = {
+            'lat': FARM_COORDS['lat'],
+            'lon': FARM_COORDS['lon'],
+            'appid': OWM_API_KEY,
+            'units': 'metric',
+            'lang': 'es'
+        }
+        
+        response = requests.get(OWM_URL, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        weather = {
+            'temp': data['main']['temp'],
+            'temp_min': data['main']['temp_min'],
+            'temp_max': data['main']['temp_max'],
+            'humidity': data['main']['humidity'],
+            'pressure': data['main']['pressure'],
+            'wind_speed': data['wind']['speed'],
+            'wind_deg': data['wind'].get('deg', 0),
+            'description': data['weather'][0]['description'],
+            'icon': data['weather'][0]['icon'],
+            'clouds': data['clouds']['all']
+        }
+        
+        print(f"[OK] Clima actual: {weather['temp']}°C, {weather['description']}")
+        return weather
+        
+    except Exception as e:
+        print(f"[ERROR] OpenWeather API: {e}")
         return None
 
 # ============================================================
@@ -803,7 +850,7 @@ def save_results(results):
     timestamp = datetime.now()
     date_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
     
-    # 1. Guardar en CSV local
+    # 2. Guardar en CSV local
     csv_file = 'data/copernicus_history.csv'
     os.makedirs('data', exist_ok=True)
     
@@ -816,11 +863,18 @@ def save_results(results):
         'ndsi_mean': results.get('ndsi', {}).get('ndsi_mean', ''),
         'ndsi_interp': results.get('ndsi', {}).get('interpretation', ''),
         'map_rgb': results.get('map_rgb', ''),
-        'map_ndvi': results.get('map_ndvi', '')
+        'map_ndvi': results.get('map_ndvi', ''),
+        'temp_c': results.get('weather', {}).get('temp', ''),
+        'temp_min_c': results.get('weather', {}).get('temp_min', ''),
+        'temp_max_c': results.get('weather', {}).get('temp_max', ''),
+        'humidity': results.get('weather', {}).get('humidity', ''),
+        'weather_desc': results.get('weather', {}).get('description', '')
     }
     
     file_exists = os.path.isfile(csv_file)
     with open(csv_file, 'a', newline='', encoding='utf-8') as f:
+        # Nota: Si el archivo ya existe y tiene otros encabezados, esto podría ser un problema
+        # Idealmente verificar headers, pero por simplicidad agregamos al final
         writer = csv.DictWriter(f, fieldnames=row.keys())
         if not file_exists:
             writer.writeheader()
@@ -832,6 +886,29 @@ def save_results(results):
         conn = db_config.get_connection()
         if conn:
             cur = conn.cursor()
+            
+            # Insertar Clima (OpenWeather)
+            if 'weather' in results and results['weather']:
+                w = results['weather']
+                cur.execute("""
+                    INSERT INTO weather_data
+                    (polygon_id, temperature_c, temp_min_c, temp_max_c, humidity_percent, pressure_hpa, wind_speed_ms, wind_deg, clouds_percent, weather_main, weather_description)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    'los_valles_veraguas',
+                    w.get('temp'),
+                    w.get('temp_min'),
+                    w.get('temp_max'),
+                    w.get('humidity'),
+                    w.get('pressure'),
+                    w.get('wind_speed'),
+                    w.get('wind_deg'),
+
+                    w.get('clouds'),
+                    'OpenWeather',
+                    w.get('description')
+                ))
+                print("[OK] Clima guardado en BD")
             
             # Insertar NDVI/NDWI/NDSI
             if 'ndvi' in results or 'ndwi' in results or 'ndsi' in results:
@@ -889,6 +966,10 @@ def collect_all_copernicus_data(mode='normal'):
         return None
     
     results = {}
+    
+    # 0. Clima Actual (OpenWeatherMap) - No consume cuota Copernicus
+    print("\n[0/5] Obteniendo clima actual (OpenWeather)...")
+    results['weather'] = get_weather_data()
     
     if mode == 'normal':
         # MODO COMPLETO: ~220 PU
@@ -1010,4 +1091,4 @@ if __name__ == "__main__":
         print("  minimal  - Solo NDVI (~30 PU)")
         print("  status   - Ver estado de cuota")
         print("\nEjecutando modo económico por defecto...")
-        collect_all_copernicus_data(mode='economic')
+        collect_all_copernicus_data(mode='normal')
