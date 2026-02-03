@@ -1,0 +1,18 @@
+# Render.com Configuration
+# Cron Job para recolectar datos cada hora
+
+services:
+  # Cron Job - Ejecuta cada hora
+  - type: cron
+    name: agromonitor-collector
+    runtime: python
+    schedule: "0 * * * *"  # Cada hora en el minuto 0
+    buildCommand: pip install requests psycopg2-binary
+    startCommand: python agro_data_collector_github.py
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: AGROMONITORING_API_KEY
+        sync: false
+      - key: POLYGON_ID
+        sync: false
